@@ -6,13 +6,13 @@ import os
 import pytesseract
 from PIL import Image
 import re
-import difflib # НОВЫЙ МОДУЛЬ ДЛЯ ИСПРАВЛЕНИЯ ОПЕЧАТОК
+import difflib
 
 # =========================================================
 # НАСТРОЙКИ СИСТЕМЫ И ПАМЯТЬ
 # =========================================================
 
-# НАСТРОЙКА TESSERACT (ТОЛЬКО ДЛЯ ЛОКАЛЬНОГО ПК НА WINDOWS)
+# ПРИ ПУБЛИКАЦИИ НА GITHUB ЭТА СТРОКА ДОЛЖНА БЫТЬ ЗАКОММЕНТИРОВАНА!
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 TEMPLATE_NAME = "образец отчета.docx"
@@ -41,25 +41,38 @@ def prepare_image_for_word(doc, uploaded_file, width_mm=70):
         st.error(f"Ошибка при обработке фото: {e}")
         return ""
 
-# --- БАЗА ДАННЫХ АВТО ДЛЯ ИСПРАВЛЕНИЯ ОШИБОК OCR ---
-CAR_BRANDS = ["TOYOTA", "HONDA", "HYUNDAI", "KIA", "LEXUS", "BMW", "MERCEDES-BENZ", "NISSAN", 
-              "VOLKSWAGEN", "AUDI", "SUBARU", "CHEVROLET", "FORD", "MAZDA", "MITSUBISHI", 
-              "RENAULT", "SKODA", "LADA", "PORSCHE", "LAND ROVER", "DAEWOO", "GEELY", "BYD", "ZEEKR"]
+# =========================================================
+# БАЗА ДАННЫХ АВТО (ОБНОВЛЕНО С УЧЕТОМ КИТАЙСКОГО АВТОПРОМА)
+# =========================================================
 
-CAR_MODELS = ["ALPHARD", "CAMRY", "COROLLA", "RAV4", "LAND CRUISER", "PRADO", "HIGHLANDER", "PRIUS", 
-              "FIT", "ACCORD", "CR-V", "CIVIC", "ODYSSEY", "STEPWGN", "SONATA", "ELANTRA", "SANTA FE", 
-              "TUCSON", "K5", "RIO", "SPORTAGE", "SORENTO", "MORNING", "RX", "LX", "ES", "GX", "GS", 
-              "IS", "NX", "RX300", "RX330", "RX350", "LX470", "LX570", "X5", "X3", "X6", "X7", "E-CLASS", 
-              "C-CLASS", "S-CLASS", "SPRINTER", "FOCUS", "TRANSIT", "GOLF", "PASSAT", "JETTA", "TIGUAN", 
-              "POLO", "FORESTER", "OUTBACK", "IMPREZA", "LEGACY", "CRUZE", "MALIBU", "COBALT", "NEXIA", 
-              "MATIZ", "SPARK", "ESTIMA", "WISH", "NOAH", "VOXY", "HARRIER", "AVANTE", "PALISADE"]
+CAR_BRANDS = [
+    "TOYOTA", "HONDA", "HYUNDAI", "KIA", "LEXUS", "BMW", "MERCEDES-BENZ", "NISSAN", 
+    "VOLKSWAGEN", "AUDI", "SUBARU", "CHEVROLET", "FORD", "MAZDA", "MITSUBISHI", 
+    "RENAULT", "SKODA", "LADA", "PORSCHE", "LAND ROVER", "DAEWOO", 
+    # КИТАЙСКИЕ БРЕНДЫ:
+    "GEELY", "BYD", "ZEEKR", "LIXIANG", "LI", "CHANGAN", "CHERY", "HAVAL", 
+    "EXEED", "OMODA", "JETOUR", "TANK", "HONGQI", "FAW", "JAC", "VOYAH", "DONGFENG"
+]
+
+CAR_MODELS = [
+    "ALPHARD", "CAMRY", "COROLLA", "RAV4", "LAND CRUISER", "PRADO", "HIGHLANDER", "PRIUS", 
+    "FIT", "ACCORD", "CR-V", "CIVIC", "ODYSSEY", "STEPWGN", "SONATA", "ELANTRA", "SANTA FE", 
+    "TUCSON", "K5", "RIO", "SPORTAGE", "SORENTO", "MORNING", "RX", "LX", "ES", "GX", "GS", 
+    "IS", "NX", "RX300", "RX330", "RX350", "LX470", "LX570", "X5", "X3", "X6", "X7", "E-CLASS", 
+    "C-CLASS", "S-CLASS", "SPRINTER", "FOCUS", "TRANSIT", "GOLF", "PASSAT", "JETTA", "TIGUAN", 
+    "POLO", "FORESTER", "OUTBACK", "IMPREZA", "LEGACY", "CRUZE", "MALIBU", "COBALT", "NEXIA", 
+    "MATIZ", "SPARK", "ESTIMA", "WISH", "NOAH", "VOXY", "HARRIER", "AVANTE", "PALISADE",
+    # КИТАЙСКИЕ МОДЕЛИ:
+    "L7", "L8", "L9", "MONJARO", "COOLRAY", "TUGELLA", "OKAVANGO", "EMGRAND",
+    "SONG", "HAN", "TANG", "YUAN", "CHAZOR", "SEAGULL", "001", "009", "X", 
+    "TIGGO", "ARRIZO", "JOLION", "DARGO", "H6", "UNI-K", "UNI-T", "UNI-V", 
+    "TXL", "VX", "RX", "DASHING", "300", "500", "FREE", "DREAM"
+]
 
 def fix_car_name(text, known_list):
     if not text: return ""
-    # Очищаем от случайных знаков препинания (оставляем только буквы)
     text = re.sub(r'[^А-ЯA-Z0-9\s\-]', '', text.upper())
     
-    # Визуальный переводчик: Кирилица -> Латиница (исправляет У->Y, Р->P и т.д.)
     mapping = {
         'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 'О': 'O', 
         'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'И': 'I', 'Л': 'L', 'Д': 'D', 'Ф': 'F', 
@@ -68,12 +81,12 @@ def fix_car_name(text, known_list):
     }
     lat_text = "".join(mapping.get(c, c) for c in text).strip()
     
-    # Умное исправление по словарю (если слово совпадает хотя бы на 45%)
+    # ПОВЫСИЛИ ПОРОГ ДО 60% (cutoff=0.60), чтобы избежать галлюцинаций вроде "Одиссея"
     if lat_text:
-        matches = difflib.get_close_matches(lat_text, known_list, n=1, cutoff=0.45)
+        matches = difflib.get_close_matches(lat_text, known_list, n=1, cutoff=0.60)
         if matches:
-            return matches[0] # Возвращаем идеальное словарное слово!
-    return lat_text
+            return matches[0] 
+    return lat_text # Если не уверен, вернет то, что прочитал
 
 # =========================================================
 # ИНТЕРФЕЙС ПРИЛОЖЕНИЯ
@@ -209,7 +222,7 @@ if sts_photos:
                                     st.session_state.auto_body_type = lines[i+j].capitalize()
                                     break
 
-                # ПРИМЕНЯЕМ АВТОКОРРЕКТОР К МАРКЕ И МОДЕЛИ!
+                # ПРИМЕНЯЕМ ОБНОВЛЕННЫЙ АВТОКОРРЕКТОР С БАЗОЙ КИТАЙСКИХ АВТО!
                 fixed_brand = fix_car_name(brand, CAR_BRANDS)
                 fixed_model = fix_car_name(model, CAR_MODELS)
                 
