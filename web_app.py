@@ -97,11 +97,22 @@ if sts_photos:
                                 addr += " " + lines[i + 2]
                             st.session_state.auto_address = addr
 
-                    # 3. Марка и Модель
-                    if "МАРКАСЫ" in text or "МАРКА /" in text or text == "МАРКА":
-                        if i + 1 < len(upper_lines): brand = upper_lines[i + 1]
-                    if "МОДЕЛИ" in text or "МОДЕЛЬ /" in text or text == "МОДЕЛЬ":
-                        if i + 1 < len(upper_lines): model = upper_lines[i + 1]
+                   # 3. Марка
+                    if "МАРКАСЫ" in text or "МАРКА /" in text or text == "МАРКА" or "BRAND" in text:
+                        # Убираем сам заголовок и смотрим, не осталось ли рядом названия машины
+                        clean_text = text.replace("МАРКАСЫ", "").replace("МАРКА", "").replace("VEHICLE", "").replace("BRAND", "").replace("/", "").strip()
+                        if len(clean_text) > 2:
+                            brand = clean_text # Нашли в той же строке
+                        elif i + 1 < len(upper_lines): 
+                            brand = upper_lines[i+1] # Ищем в следующей строке
+                            
+                    # 4. Модель
+                    if "МОДЕЛИ" in text or "МОДЕЛЬ /" in text or text == "МОДЕЛЬ" or "MODEL" in text:
+                        clean_text = text.replace("МОДЕЛИ", "").replace("МОДЕЛЬ", "").replace("MODEL", "").replace("/", "").strip()
+                        if len(clean_text) > 2:
+                            model = clean_text
+                        elif i + 1 < len(upper_lines): 
+                            model = upper_lines[i+1]
 
                     # 4. Год выпуска
                     if "ГОД ВЫПУСКА" in text or "ЖЫЛЫ" in text:
