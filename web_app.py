@@ -16,12 +16,15 @@ import numpy as np
 # ПРИ ПУБЛИКАЦИИ НА GITHUB ЭТА СТРОКА ДОЛЖНА БЫТЬ ЗАКОММЕНТИРОВАНА!
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
+# 1. Изменили название шаблона по твоей просьбе!
 TEMPLATE_NAME = "образец отчета.docx"
 
 st.set_page_config(page_title="Генератор Отчетов - Гарант Оценка", layout="wide")
 
 keys = ['auto_vin', 'auto_reg', 'auto_year', 'auto_model', 'auto_fio', 
         'auto_engine', 'auto_color', 'auto_address', 'auto_tech_passport', 'auto_body_type']
+
+# Инициализация памяти
 for k in keys:
     if k not in st.session_state:
         st.session_state[k] = ""
@@ -60,7 +63,7 @@ def enhance_image_for_ocr(uploaded_file):
         return Image.open(uploaded_file)
 
 # =========================================================
-# БАЗА ДАННЫХ АВТО 
+# БАЗА ДАННЫХ АВТО
 # =========================================================
 
 CAR_BRANDS = [
@@ -96,7 +99,7 @@ if os.path.exists(TEMPLATE_NAME):
     template_source = TEMPLATE_NAME
 else:
     st.warning(f"⚠️ Файл `{TEMPLATE_NAME}` не найден. Загрузите его вручную:")
-    template_source = st.file_uploader("Загрузите шаблон отчета (template.docx)", type="docx")
+    template_source = st.file_uploader(f"Загрузите шаблон отчета ({TEMPLATE_NAME})", type="docx")
 
 st.divider()
 
@@ -110,7 +113,11 @@ sts_photos = st.file_uploader(
 
 if sts_photos:
     if st.button("Распознать документы", type="primary"):
-        with st.spinner("Анализирую документы..."):
+        # ОЧИЩАЕМ ПАМЯТЬ ПЕРЕД НОВЫМ СКАНИРОВАНИЕМ
+        for k in keys: st.session_state[k] = ""
+        st.session_state.auto_steering = "Левый руль"
+        
+        with st.spinner("Снайперский двунаправленный алгоритм читает документы..."):
             try:
                 all_extracted_text = ""
                 for photo in sts_photos:
@@ -123,52 +130,16 @@ if sts_photos:
                     all_extracted_text += text_raw + "\n\n" + text_enh + "\n\n"
                 
                 lines = [line.strip() for line in all_extracted_text.split('\n') if line.strip()]
-                
-                # РАЗДЕЛЯЕМ ТЕКСТ: 
-                # 1. Для поиска номеров (меняем О на 0 и удаляем пробелы)
-                clean_text_numbers = all_extracted_text.upper().replace(" ", "").replace("\n", "").replace("O", "0")
-                # 2. Для поиска слов (сохраняем пробелы и букву О!)
+                clean_text_no_spaces = all_extracted_text.upper().replace(" ", "").replace("\n", "").replace("O", "0")
                 clean_text_words = all_extracted_text.upper()
 
                 # ==============================================================
-                # 1. ТОЧНЫЕ ДАННЫЕ (Математический поиск)
+                # 1. ГЛОБАЛЬНЫЙ ПОИСК (Госномер, Марка, Модель)
                 # ==============================================================
 
-                # Госномер (Ищем только в цифровом тексте)
-                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_numbers)
+                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_no_spaces)
                 if reg_match_kg: st.session_state.auto_reg = reg_match_kg.group(0)
 
-                # VIN (Обязательно содержит цифры, исключаем слово KATT00 и YEAR0FMANUFACTURE)
-                vin_matches = re.finditer(r'[A-HJ-NPR-Z0-9]{17}', clean_text_numbers)
-                for match in vin_matches:
-                    vin_cand = match.group(0)
-                    if sum(c.isdigit() for c in vin_cand) >= 4 and not re.search(r'(KATT|YEAR|KYRG)', vin_cand):
-                        st.session_state.auto_vin = vin_cand
-                        break
-                
-                # Номер Шасси (если VIN не найден)
-                if not st.session_state.auto_vin:
-                    chassis_match = re.search(r'[A-Z0-9]{3,6}\-[0-9]{5,7}', clean_text_numbers)
-                    if chassis_match: st.session_state.auto_vin = chassis_match.group(0)
-
-                # Номер техпаспорта (AB 1602330)
-                tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
-                if tp_match: st.session_state.auto_tech_passport = tp_match.group(0)
-
-                # Год выпуска
-                year_match = re.search(r'\b(199\d|200\d|201\d|202\d)\b', clean_text_words)
-                if year_match: st.session_state.auto_year = year_match.group(0)
-
-                # Объем двигателя (Исключаем текущие года)
-                vols = re.findall(r'\b([8-9]\d{2}|[1-7]\d{3})\b', clean_text_words)
-                valid_vols = [v for v in vols if v not in [st.session_state.auto_year, "2024", "2025", "2026", "2027"]]
-                if valid_vols: st.session_state.auto_engine = valid_vols[-1]
-
-                # ==============================================================
-                # 2. СЛОВАРНЫЕ ДАННЫЕ (Марка, Модель, Цвет)
-                # ==============================================================
-                
-                # Переводим кириллицу в латиницу, сохраняя "О"!
                 mapping = {
                     'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 
                     'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'И': 'I', 'Л': 'L', 'Д': 'D', 'Ф': 'F', 
@@ -177,8 +148,7 @@ if sts_photos:
                 }
                 lat_global_text = "".join(mapping.get(c, c) for c in clean_text_words)
                 
-                found_brand = ""
-                found_model = ""
+                found_brand, found_model = "", ""
                 for b in CAR_BRANDS:
                     if re.search(rf'\b{b}\b', lat_global_text): found_brand = b; break
                 for m in CAR_MODELS:
@@ -187,8 +157,103 @@ if sts_photos:
                 if found_brand or found_model:
                     st.session_state.auto_model = f"{found_brand} {found_model}".strip()
 
-                for line in lines:
+                if "ПРАВ" in clean_text_words: st.session_state.auto_steering = "Правый руль"
+                elif "ЛЕВ" in clean_text_words: st.session_state.auto_steering = "Левый руль"
+
+                # ==============================================================
+                # 2. УМНЫЙ ПОИСК "СПРАВА И СНИЗУ" (Якорный метод)
+                # ==============================================================
+                
+                for i, line in enumerate(lines):
                     line_up = line.upper()
+
+                    # --- ПОИСК ФИО ---
+                    if not st.session_state.auto_fio and any(kw in line_up for kw in ["ВЛАДЕЛЕЦ", "ЭЭСИ", "OWNER"]):
+                        # 1. Смотрим НАПРАВО (физический СТС)
+                        right = re.split(r'ВЛАДЕЛЕЦ|ЭЭСИ|OWNER', line_up)[-1]
+                        # Жестко удаляем английские буквы и знаки препинания (убьет мусор вроде Ванлкоуа Сно:Ро.#)
+                        right_cyr = re.sub(r'[A-Z!@#\$%\^&\*\(\)_+=\{\}\[\];\'<>\?\|\\~`]', '', right).replace(":", "").strip()
+                        if len(right_cyr.split()) >= 2 and not re.search(r'\d', right_cyr):
+                            st.session_state.auto_fio = right_cyr.title()
+                        else:
+                            # 2. Смотрим ВНИЗ (электронный СТС)
+                            for j in range(1, 4):
+                                if i + j < len(lines):
+                                    cand = lines[i+j]
+                                    cand_cyr = re.sub(r'[A-Z!@#\$%\^&\*\(\)_+=\{\}\[\];\'<>\?\|\\~`]', '', cand.upper()).replace(":", "").strip()
+                                    if len(cand_cyr.split()) >= 2 and not re.search(r'\d', cand_cyr) and "АДРЕС" not in cand_cyr:
+                                        st.session_state.auto_fio = cand_cyr.title()
+                                        break
+
+                    # --- ПОИСК АДРЕСА ---
+                    if not st.session_state.auto_address and any(kw in line_up for kw in ["ДАРЕГИ", "АДРЕС", "ADDRESS"]):
+                        # 1. Смотрим НАПРАВО
+                        right = re.split(r'ДАРЕГИ|АДРЕС СОБСТВЕННИКА|ADDRESS', line_up)[-1]
+                        # Удаляем английский язык, чтобы не было "THE KYRGYZ REPUBLIC"
+                        right_cyr = re.sub(r'[A-Z]', '', right).replace(":", "").replace("'", "").strip()
+                        if len(right_cyr) > 10 and "БЕРГЕН" not in right_cyr:
+                            st.session_state.auto_address = right_cyr
+                        else:
+                            # 2. Смотрим ВНИЗ и собираем многострочный адрес
+                            addr_parts = []
+                            for j in range(1, 5):
+                                if i + j < len(lines):
+                                    cand_up = lines[i+j].upper()
+                                    # Условие остановки
+                                    if any(kw in cand_up for kw in ["БЕРГЕН", "ОРГАН", "МАРКА", "МОДЕЛЬ", "КАТТАЛГАН"]): break
+                                    cand_cyr = re.sub(r'[A-Z]', '', cand_up).strip()
+                                    # Игнорируем пустые строки и строки состоящие только из цифр (ПИН)
+                                    if len(cand_cyr) > 3 and not re.fullmatch(r'[\d\s\.\,]+', cand_cyr):
+                                        addr_parts.append(cand_cyr)
+                            if addr_parts:
+                                st.session_state.auto_address = " ".join(addr_parts).strip()
+
+                    # --- ПОИСК ОБЪЕМА ДВС ---
+                    if not st.session_state.auto_engine and any(kw in line_up for kw in ["ОБЪЕМ", "КӨЛӨМҮ", "CAPACITY"]):
+                        # Ищем только реалистичные кубы (800 - 7999), чтобы не взять дом 121
+                        right = re.split(r'ОБЪЕМ|КӨЛӨМҮ|CAPACITY|СМ3', line_up)[-1]
+                        vols = re.findall(r'\b([8-9]\d{2}|[1-7]\d{3})\b', right)
+                        if vols:
+                            st.session_state.auto_engine = vols[-1]
+                        else:
+                            for j in range(1, 4):
+                                if i + j < len(lines):
+                                    vols_below = re.findall(r'\b([8-9]\d{2}|[1-7]\d{3})\b', lines[i+j])
+                                    if vols_below:
+                                        st.session_state.auto_engine = vols_below[-1]
+                                        break
+
+                    # --- ПОИСК VIN ---
+                    if not st.session_state.auto_vin and any(kw in line_up for kw in ["VIN", "ШАССИ", "IDENTIFICATION"]):
+                        right = re.split(r'VIN|ШАССИ|NUMBER', line_up.replace("O", "0"))[-1]
+                        vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}', right)
+                        # Защита: в VIN должно быть хотя бы 3 буквы, чтобы не поймать цифры ПИН-кода
+                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 3:
+                            st.session_state.auto_vin = vin_match.group(0)
+                        else:
+                            for j in range(1, 4):
+                                if i + j < len(lines):
+                                    cand = lines[i+j].replace("O", "0").upper()
+                                    v_match = re.search(r'[A-HJ-NPR-Z0-9]{17}', cand)
+                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 3:
+                                        st.session_state.auto_vin = v_match.group(0)
+                                        break
+                                        
+                    # --- ПОИСК ГОДА ---
+                    if not st.session_state.auto_year and any(kw in line_up for kw in ["ГОД", "ЖЫЛЫ", "YEAR"]):
+                        right = re.split(r'ГОД|ЖЫЛЫ|MANUFACTURE', line_up)[-1]
+                        y_match = re.search(r'\b(199\d|200\d|201\d|202\d)\b', right)
+                        if y_match:
+                            st.session_state.auto_year = y_match.group(0)
+                        else:
+                            for j in range(1, 3):
+                                if i + j < len(lines):
+                                    ym = re.search(r'\b(199\d|200\d|201\d|202\d)\b', lines[i+j])
+                                    if ym:
+                                        st.session_state.auto_year = ym.group(0)
+                                        break
+
+                    # --- ЦВЕТ И ТИП КУЗОВА ---
                     if not st.session_state.auto_color:
                         for c in KNOWN_COLORS:
                             if c in line_up and "ЦВЕТ" not in line_up:
@@ -198,51 +263,10 @@ if sts_photos:
                             if bt in line_up:
                                 st.session_state.auto_body_type = line.title(); break
 
-                if "ПРАВ" in clean_text_words: st.session_state.auto_steering = "Правый руль"
-                elif "ЛЕВ" in clean_text_words: st.session_state.auto_steering = "Левый руль"
-
-                # ==============================================================
-                # 3. УМНЫЙ СБОР ТЕКСТОВЫХ БЛОКОВ (ФИО И АДРЕС)
-                # ==============================================================
-                
-                # СБОР ФИО
-                fio_parts = []
-                capture_fio = False
-                for line in lines:
-                    line_up = line.upper()
-                    if "ВЛАДЕЛЕЦ" in line_up or "ЭЭСИ" in line_up or "OWNER" in line_up:
-                        capture_fio = True
-                        continue
-                        
-                    if capture_fio:
-                        # Условия остановки сбора ФИО
-                        if "ПИН" in line_up or "PIN" in line_up or "ДАРЕГИ" in line_up or "АДРЕС" in line_up or "ADDRESS" in line_up:
-                            capture_fio = False
-                            break
-                        # В имени не должно быть цифр
-                        if not re.search(r'\d', line) and len(line.split()) >= 2 and "МАРКА" not in line_up:
-                            fio_parts.append(line)
-                            
-                if fio_parts: st.session_state.auto_fio = " ".join(fio_parts).title()
-
-                # СБОР АДРЕСА
-                address_parts = []
-                capture_addr = False
-                for line in lines:
-                    line_up = line.upper()
-                    if "КЫРГЫЗСКАЯ РЕСПУБЛИКА" in line_up:
-                        capture_addr = True
-                    
-                    if capture_addr:
-                        # Условия остановки сбора Адреса
-                        if "МАРКА" in line_up or "БЕРГЕН" in line_up or "ОРГАН" in line_up or "КАТТАЛГАН" in line_up or "MODEL" in line_up:
-                            capture_addr = False
-                            break
-                        # Игнорируем английский перевод заголовка адреса
-                        if "THE KYRGYZ REPUBLIC" not in line_up and "OWNER'S ADDRESS" not in line_up:
-                            address_parts.append(line)
-                
-                if address_parts: st.session_state.auto_address = " ".join(address_parts).strip()
+                # Номер техпаспорта (ищет в любом месте документа)
+                if not st.session_state.auto_tech_passport:
+                    tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
+                    if tp_match: st.session_state.auto_tech_passport = tp_match.group(0)
 
                 st.success("Документы проанализированы! Данные перенесены в форму ниже.")
                 
