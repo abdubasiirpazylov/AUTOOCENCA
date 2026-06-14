@@ -7,6 +7,8 @@ import pytesseract
 from PIL import Image
 import re
 import difflib
+import cv2
+import numpy as np
 
 # =========================================================
 # НАСТРОЙКИ СИСТЕМЫ И ПАМЯТЬ
@@ -28,7 +30,12 @@ for k in keys:
 if 'auto_steering' not in st.session_state:
     st.session_state.auto_steering = "Левый руль"
 
+# =========================================================
+# ФУНКЦИИ ОБРАБОТКИ ФОТОГРАФИЙ
+# =========================================================
+
 def prepare_image_for_word(doc, uploaded_file, width_mm=70):
+    """Подготавливает фото для вставки в Word (защита от сломанных форматов)"""
     try:
         img = Image.open(uploaded_file)
         if img.mode != 'RGB':
@@ -41,15 +48,41 @@ def prepare_image_for_word(doc, uploaded_file, width_mm=70):
         st.error(f"Ошибка при обработке фото: {e}")
         return ""
 
+def enhance_image_for_ocr(uploaded_file):
+    """OpenCV фильтр: очищает документ от теней, бликов и улучшает текст для нейросети"""
+    try:
+        img = Image.open(uploaded_file)
+        img_array = np.array(img)
+
+        # Перевод в градации серого
+        if len(img_array.shape) == 3:
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_array
+
+        # Увеличение картинки для лучшей читаемости мелкого шрифта
+        gray = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+
+        # Нормализация контраста (делает текст чернее, а фон белее)
+        norm_img = np.zeros((gray.shape[0], gray.shape[1]))
+        gray = cv2.normalize(gray, norm_img, 0, 255, cv2.NORM_MINMAX)
+
+        # Легкое размытие для удаления цифрового шума камеры
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        return Image.fromarray(blur)
+    except Exception as e:
+        st.warning(f"Не удалось применить OpenCV фильтры, читаем оригинал. Ошибка: {e}")
+        return Image.open(uploaded_file)
+
 # =========================================================
-# БАЗА ДАННЫХ АВТО (ОБНОВЛЕНО С УЧЕТОМ КИТАЙСКОГО АВТОПРОМА)
+# БАЗА ДАННЫХ АВТО (С УЧЕТОМ КИТАЙСКОГО АВТОПРОМА)
 # =========================================================
 
 CAR_BRANDS = [
-    "TOYOTA", "HONDA", "HYUNDAI", "KIA", "LEXUS", "BMW", "MERCEDES-BENZ", "NISSAN", 
+    "TOYOTA", "HONDA", "HYUNDAI", "KIA", "LEXUS", "BMW", "MERCEDES-BENZ", "MERCEDES", "NISSAN", 
     "VOLKSWAGEN", "AUDI", "SUBARU", "CHEVROLET", "FORD", "MAZDA", "MITSUBISHI", 
     "RENAULT", "SKODA", "LADA", "PORSCHE", "LAND ROVER", "DAEWOO", 
-    # КИТАЙСКИЕ БРЕНДЫ:
     "GEELY", "BYD", "ZEEKR", "LIXIANG", "LI", "CHANGAN", "CHERY", "HAVAL", 
     "EXEED", "OMODA", "JETOUR", "TANK", "HONGQI", "FAW", "JAC", "VOYAH", "DONGFENG"
 ]
@@ -62,31 +95,14 @@ CAR_MODELS = [
     "C-CLASS", "S-CLASS", "SPRINTER", "FOCUS", "TRANSIT", "GOLF", "PASSAT", "JETTA", "TIGUAN", 
     "POLO", "FORESTER", "OUTBACK", "IMPREZA", "LEGACY", "CRUZE", "MALIBU", "COBALT", "NEXIA", 
     "MATIZ", "SPARK", "ESTIMA", "WISH", "NOAH", "VOXY", "HARRIER", "AVANTE", "PALISADE",
-    # КИТАЙСКИЕ МОДЕЛИ:
     "L7", "L8", "L9", "MONJARO", "COOLRAY", "TUGELLA", "OKAVANGO", "EMGRAND",
     "SONG", "HAN", "TANG", "YUAN", "CHAZOR", "SEAGULL", "001", "009", "X", 
     "TIGGO", "ARRIZO", "JOLION", "DARGO", "H6", "UNI-K", "UNI-T", "UNI-V", 
     "TXL", "VX", "RX", "DASHING", "300", "500", "FREE", "DREAM"
 ]
 
-def fix_car_name(text, known_list):
-    if not text: return ""
-    text = re.sub(r'[^А-ЯA-Z0-9\s\-]', '', text.upper())
-    
-    mapping = {
-        'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 'О': 'O', 
-        'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'И': 'I', 'Л': 'L', 'Д': 'D', 'Ф': 'F', 
-        'Г': 'G', 'З': 'Z', 'Б': 'B', 'П': 'P', 'Ь': '', 'Ъ': '', 'Э': 'E', 'Ч': 'CH', 
-        'Я': 'YA', 'Ю': 'YU', 'Ц': 'C', 'Й': 'Y', 'Ж': 'J'
-    }
-    lat_text = "".join(mapping.get(c, c) for c in text).strip()
-    
-    # ПОВЫСИЛИ ПОРОГ ДО 60% (cutoff=0.60), чтобы избежать галлюцинаций вроде "Одиссея"
-    if lat_text:
-        matches = difflib.get_close_matches(lat_text, known_list, n=1, cutoff=0.60)
-        if matches:
-            return matches[0] 
-    return lat_text # Если не уверен, вернет то, что прочитал
+KNOWN_COLORS = ["БЕЛЫЙ", "СЕРЕБРИСТЫЙ", "СЕРЫЙ", "ЧЕРНЫЙ", "СИНИЙ", "КРАСНЫЙ", "ЗЕЛЕНЫЙ", "ЖЕЛТЫЙ", "ОРАНЖЕВЫЙ", "КОРИЧНЕВЫЙ", "БОРДОВЫЙ", "ГОЛУБОЙ", "БЕЖЕВЫЙ", "ЗОЛОТИСТЫЙ", "ФИОЛЕТОВЫЙ"]
+KNOWN_BODIES = ["СЕДАН", "ХЭТЧБЕК", "УНИВЕРСАЛ", "ВНЕДОРОЖНИК", "КРОССОВЕР", "КУПЕ", "МИНИВЭН", "ПИКАП", "ФУРГОН", "ЛЕГКОВОЙ"]
 
 # =========================================================
 # ИНТЕРФЕЙС ПРИЛОЖЕНИЯ
@@ -113,132 +129,116 @@ sts_photos = st.file_uploader(
 
 if sts_photos:
     if st.button("Распознать документы", type="primary"):
-        with st.spinner("Нейросеть Google Tesseract читает документы..."):
+        with st.spinner("OpenCV и Tesseract анализируют документы..."):
             try:
                 all_extracted_text = ""
                 for photo in sts_photos:
-                    img = Image.open(photo)
-                    text = pytesseract.image_to_string(img, lang='rus+eng')
+                    # Применяем фильтр OpenCV перед распознаванием
+                    enhanced_img = enhance_image_for_ocr(photo)
+                    text = pytesseract.image_to_string(enhanced_img, lang='rus+eng')
                     all_extracted_text += text + "\n\n"
                 
                 lines = [line.strip() for line in all_extracted_text.split('\n') if line.strip()]
                 upper_lines = [line.upper() for line in lines]
-                
-                brand = ""
-                model = ""
 
-                for i, text in enumerate(upper_lines):
-                    
-                    # 1. ФИО Владельца
-                    if ("ВЛАДЕЛЕЦ" in text or "ЭЭСИ" in text or "OWNER" in text) and "АДРЕС" not in text and "ADDRESS" not in text:
-                        if i + 1 < len(lines): 
-                            st.session_state.auto_fio = lines[i+1].title()
+                # ==============================================================
+                # ГЛОБАЛЬНЫЙ МАТЕМАТИЧЕСКИЙ ПОИСК (БЕЗ ПРИВЯЗКИ К СТРОКАМ)
+                # ==============================================================
+                clean_text_no_spaces = all_extracted_text.replace(" ", "").replace("\n", "").upper().replace("O", "0")
+                clean_text_upper = all_extracted_text.upper().replace("O", "0")
 
-                    # 2. Адрес
-                    if "АДРЕС СОБСТВЕННИКА" in text or "ДАРЕГИ" in text:
-                        if i + 1 < len(lines):
-                            addr = lines[i+1]
-                            if i + 2 < len(lines) and len(lines[i+2]) > 5 and "МАРКА" not in upper_lines[i+2]:
-                                addr += " " + lines[i+2]
-                            st.session_state.auto_address = addr
-                            
-                    # 3. Марка
-                    if "МАРКАСЫ" in text or "МАРКА /" in text or text == "МАРКА" or "BRAND" in text:
-                        clean_text = text.replace("МАРКАСЫ", "").replace("МАРКА", "").replace("VEHICLE", "").replace("BRAND", "").replace("/", "").strip()
-                        if len(clean_text) > 2:
-                            brand = clean_text
-                        elif i + 1 < len(upper_lines): 
-                            brand = upper_lines[i+1]
-                            
-                    # 4. Модель
-                    if "МОДЕЛИ" in text or "МОДЕЛЬ /" in text or text == "МОДЕЛЬ" or "MODEL" in text:
-                        clean_text = text.replace("МОДЕЛИ", "").replace("МОДЕЛЬ", "").replace("MODEL", "").replace("/", "").strip()
-                        if len(clean_text) > 2:
-                            model = clean_text
-                        elif i + 1 < len(upper_lines): 
-                            model = upper_lines[i+1]
-                            
-                    # 5. Год выпуска
-                    if "ГОД ВЫПУСКА" in text or "ЖЫЛЫ" in text:
-                        for j in range(0, 3):
-                            if i + j < len(upper_lines):
-                                y_match = re.search(r'\b(19|20)\d{2}\b', upper_lines[i+j])
-                                if y_match: 
-                                    st.session_state.auto_year = y_match.group(0)
-                                    break
-
-                    # 6. Номер Кузова / Шасси / VIN
-                    if "ШАССИ" in text or "КУЗОВА" in text or "VIN" in text:
-                        for j in range(0, 3):
-                            if i + j < len(upper_lines):
-                                v_match = re.search(r'[A-Z0-9\-]{9,17}', upper_lines[i+j].replace("O", "0"))
-                                if v_match and "ОТМЕТКИ" not in upper_lines[i+j]:
-                                    st.session_state.auto_vin = v_match.group(0)
-                                    break
-
-                    # 7. Объем двигателя
-                    if "ОБЪЕМ" in text or "КӨЛӨМҮ" in text or "VOLUME" in text:
-                        for j in range(0, 4):
-                            if i + j < len(upper_lines):
-                                vols = re.findall(r'\d{3,4}', upper_lines[i+j].replace("O", "0"))
-                                if vols:
-                                    st.session_state.auto_engine = vols[-1]
-                                    break
-
-                    # 8. Цвет
-                    if "ЦВЕТ" in text or "ТҮСҮ" in text:
-                        for j in range(1, 3):
-                            if i + j < len(lines):
-                                if len(lines[i+j]) > 3 and "КУЗОВ" not in upper_lines[i+j]:
-                                    st.session_state.auto_color = lines[i+j].capitalize()
-                                    break
-
-                    # 9. Положение руля
-                    if "РУЛЬ" in text or "РАСПОЛОЖЕНИЕ РУЛЯ" in text:
-                        for j in range(0, 3):
-                            if i + j < len(upper_lines):
-                                if "ПРАВ" in upper_lines[i+j]:
-                                    st.session_state.auto_steering = "Правый руль"
-                                    break
-                                elif "ЛЕВ" in upper_lines[i+j]:
-                                    st.session_state.auto_steering = "Левый руль"
-                                    break
-                                    
-                    # 10. Номер техпаспорта 
-                    if "СЕРИЯ И НОМЕР" in text or "СЕРИЯСЫ" in text:
-                        for j in range(0, 3):
-                            if i + j < len(upper_lines):
-                                clean_line = upper_lines[i+j].replace("O", "0")
-                                tp = re.search(r'[A-ZА-Я]{2}\s?\d{6,7}', clean_line)
-                                if tp:
-                                    st.session_state.auto_tech_passport = tp.group(0)
-                                    break
-                                    
-                    # 11. Тип кузова
-                    if "ВИД КУЗОВА" in text or "ТИП ТС" in text or "КУЗОВТУН ТҮРҮ" in text:
-                        for j in range(1, 3):
-                            if i + j < len(lines):
-                                if "VEHICLE" not in upper_lines[i+j] and len(lines[i+j]) > 3:
-                                    st.session_state.auto_body_type = lines[i+j].capitalize()
-                                    break
-
-                # ПРИМЕНЯЕМ ОБНОВЛЕННЫЙ АВТОКОРРЕКТОР С БАЗОЙ КИТАЙСКИХ АВТО!
-                fixed_brand = fix_car_name(brand, CAR_BRANDS)
-                fixed_model = fix_car_name(model, CAR_MODELS)
-                
-                if fixed_brand or fixed_model:
-                    st.session_state.auto_model = f"{fixed_brand} {fixed_model}".strip()
-
-                # Госномер
-                clean_string = all_extracted_text.replace(" ", "").replace("\n", "").upper().replace("O", "0")
-                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{3}', clean_string)
-                
+                # 1. Госномер
+                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{3}', clean_text_no_spaces)
                 if reg_match_kg:
                     st.session_state.auto_reg = reg_match_kg.group(0)
                 else:
-                    reg_match_old = re.search(r'\b[A-ZА-Я]\d{4}[A-ZА-Я]{1,2}\b', all_extracted_text.upper())
-                    if reg_match_old:
-                        st.session_state.auto_reg = reg_match_old.group(0).replace(" ", "")
+                    reg_match_old = re.search(r'\b[A-ZА-Я]\d{4}[A-ZА-Я]{1,2}\b', clean_text_upper)
+                    if reg_match_old: st.session_state.auto_reg = reg_match_old.group(0).replace(" ", "")
+
+                # 2. VIN или Номер Шасси
+                vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}', clean_text_no_spaces)
+                if vin_match:
+                    st.session_state.auto_vin = vin_match.group(0)
+                else:
+                    chassis_match = re.search(r'[A-Z0-9]{3,6}\-[0-9]{5,7}', clean_text_no_spaces)
+                    if chassis_match: st.session_state.auto_vin = chassis_match.group(0)
+
+                # 3. Номер техпаспорта (AB 1602330)
+                tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_upper)
+                if tp_match: st.session_state.auto_tech_passport = tp_match.group(0)
+
+                # 4. Год выпуска
+                year_match = re.search(r'\b(199\d|200\d|201\d|202\d)\b', clean_text_upper)
+                if year_match: st.session_state.auto_year = year_match.group(0)
+
+                # 5. Объем двигателя (Ищем числа 3-4 знака, исключая год выпуска)
+                vols = re.findall(r'\b[1-8]\d{2,3}\b', clean_text_upper)
+                if vols:
+                    for v in reversed(vols):
+                        if v != st.session_state.auto_year:
+                            st.session_state.auto_engine = v
+                            break
+
+                # 6. Марка и Модель (Чистый словарь)
+                mapping = {
+                    'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 'О': 'O', 
+                    'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'И': 'I', 'Л': 'L', 'Д': 'D', 'Ф': 'F', 
+                    'Г': 'G', 'З': 'Z', 'Б': 'B', 'П': 'P', 'Ь': '', 'Ъ': '', 'Э': 'E', 'Ч': 'CH', 
+                    'Я': 'YA', 'Ж': 'J'
+                }
+                lat_global_text = "".join(mapping.get(c, c) for c in clean_text_upper)
+                
+                found_brand = ""
+                found_model = ""
+                for b in CAR_BRANDS:
+                    if re.search(rf'\b{b}\b', lat_global_text): found_brand = b; break
+                for m in CAR_MODELS:
+                    if re.search(rf'\b{m}\b', lat_global_text): found_model = m; break
+                
+                if found_brand or found_model:
+                    st.session_state.auto_model = f"{found_brand} {found_model}".strip()
+
+                # 7. Цвет и Тип кузова
+                for line in upper_lines:
+                    if not st.session_state.auto_color:
+                        for c in KNOWN_COLORS:
+                            if c in line and "ЦВЕТ" not in line:
+                                st.session_state.auto_color = line.title(); break
+                    if not st.session_state.auto_body_type:
+                        for bt in KNOWN_BODIES:
+                            if bt in line:
+                                st.session_state.auto_body_type = line.title(); break
+
+                # 8. Положение руля
+                if "ПРАВ" in clean_text_upper: st.session_state.auto_steering = "Правый руль"
+                elif "ЛЕВ" in clean_text_upper: st.session_state.auto_steering = "Левый руль"
+
+                # ==============================================================
+                # ПОИСК ТЕКСТОВЫХ БЛОКОВ (ФИО И АДРЕС)
+                # ==============================================================
+                for i, text in enumerate(upper_lines):
+                    
+                    # Умный поиск ФИО: Ищем после слова "Владелец", но игнорируем ПИН (цифры)
+                    if "ВЛАДЕЛЕЦ" in text or "ЭЭСИ" in text or "OWNER" in text:
+                        for j in range(1, 6):
+                            if i + j < len(lines):
+                                candidate = lines[i+j].strip()
+                                if not re.search(r'\d', candidate) and len(candidate.split()) >= 2:
+                                    if "АДРЕС" not in candidate.upper():
+                                        st.session_state.auto_fio = candidate.title()
+                                        break
+
+                    # Умный поиск Адреса по ключевым словам
+                    if "ДАРЕГИ" in text or "АДРЕС" in text:
+                        for j in range(1, 6):
+                            if i + j < len(upper_lines):
+                                if "БИШКЕК" in upper_lines[i+j] or "РЕСПУБЛИКА" in upper_lines[i+j] or "ОБЛ" in upper_lines[i+j]:
+                                    addr = lines[i+j]
+                                    if i + j + 1 < len(lines) and not re.search(r'\d{5}', lines[i+j+1]):
+                                        if "БЕРГЕН" not in upper_lines[i+j+1] and "ОРГАН" not in upper_lines[i+j+1]:
+                                            addr += " " + lines[i+j+1]
+                                    st.session_state.auto_address = addr.strip()
+                                    break
 
                 st.success("Документы проанализированы! Данные перенесены в форму ниже.")
                 
