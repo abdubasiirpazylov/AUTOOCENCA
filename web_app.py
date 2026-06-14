@@ -12,7 +12,7 @@ import re
 # =========================================================
 
 # НАСТРОЙКА TESSERACT (ТОЛЬКО ДЛЯ ЛОКАЛЬНОГО ПК НА WINDOWS)
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+#pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 TEMPLATE_NAME = "образец отчета.docx"
 
