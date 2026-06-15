@@ -136,19 +136,23 @@ if sts_photos:
                 reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_numbers)
                 if reg_match_kg: st.session_state.auto_reg = reg_match_kg.group(0)
 
-                # VIN (Ищем 17 символов. Исключаем мусорные слова)
+                # VIN (Ищем 17 символов. ЖЕСТКО Исключаем мусорные английские слова)
                 vin_matches = re.finditer(r'[A-HJ-NPR-Z0-9]{17}', clean_text_numbers)
                 for match in vin_matches:
                     vin_cand = match.group(0)
-                    if sum(c.isdigit() for c in vin_cand) >= 4 and not re.search(r'(KATT|YEAR|KYRG)', vin_cand):
+                    if sum(c.isdigit() for c in vin_cand) >= 4 and not re.search(r'(KATT|YEAR|KYRG|PERS|NUMB|MAKE|MOD|COL|VOL|ENG|OWN)', vin_cand):
                         st.session_state.auto_vin = vin_cand
                         break
                 
-                # Номер Шасси (ЯПОНСКИЕ АВТО). Ищет формат букв и цифр, возможно с дефисом
+                # Номер Шасси (ЯПОНСКИЕ АВТО). Ищет формат: Буквы + Цифры + (Дефис) + Цифры
                 if not st.session_state.auto_vin:
-                    chassis_match = re.search(r'[A-Z0-9]{3,6}[-]?\d{5,7}', clean_text_numbers)
-                    if chassis_match and not re.search(r'(KATT|YEAR|KYRG)', chassis_match.group(0)):
-                        st.session_state.auto_vin = chassis_match.group(0)
+                    chassis_matches = re.finditer(r'[A-Z]{2,5}\d{1,4}[-]?\d{4,8}', clean_text_numbers)
+                    for match in chassis_matches:
+                        chass = match.group(0)
+                        # Защита от Госномеров и Техпаспортов (KG)
+                        if not chass.startswith("KG"):
+                            st.session_state.auto_vin = chass
+                            break
 
                 # Номер техпаспорта (Исключаем предлоги ОТ и ДО, чтобы не путать с датами)
                 tp_matches = re.finditer(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
@@ -235,15 +239,15 @@ if sts_photos:
                     # --- ПОИСК VIN (С УЧЕТОМ ЯПОНСКИХ ШАССИ) ---
                     if not st.session_state.auto_vin and any(kw in line_up for kw in ["VIN", "ШАССИ", "IDENTIFICATION"]):
                         right = re.split(r'VIN|ШАССИ|NUMBER', line_up.replace("O", "0"))[-1]
-                        vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z0-9]{3,6}[-]?\d{5,7}', right)
-                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 2:
+                        vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z]{2,5}\d{1,4}[-]?\d{4,8}', right)
+                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 2 and not vin_match.group(0).startswith("KG"):
                             st.session_state.auto_vin = vin_match.group(0)
                         else:
                             for j in range(1, 4):
                                 if i + j < len(lines):
                                     cand = lines[i+j].replace("O", "0").upper()
-                                    v_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z0-9]{3,6}[-]?\d{5,7}', cand)
-                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 2:
+                                    v_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z]{2,5}\d{1,4}[-]?\d{4,8}', cand)
+                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 2 and not v_match.group(0).startswith("KG"):
                                         st.session_state.auto_vin = v_match.group(0)
                                         break
                                         
