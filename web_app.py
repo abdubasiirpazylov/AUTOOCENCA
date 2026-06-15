@@ -16,15 +16,12 @@ import numpy as np
 # ПРИ ПУБЛИКАЦИИ НА GITHUB ЭТА СТРОКА ДОЛЖНА БЫТЬ ЗАКОММЕНТИРОВАНА!
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# 1. Изменили название шаблона по твоей просьбе!
 TEMPLATE_NAME = "образец отчета.docx"
 
 st.set_page_config(page_title="Генератор Отчетов - Гарант Оценка", layout="wide")
 
 keys = ['auto_vin', 'auto_reg', 'auto_year', 'auto_model', 'auto_fio', 
         'auto_engine', 'auto_color', 'auto_address', 'auto_tech_passport', 'auto_body_type']
-
-# Инициализация памяти
 for k in keys:
     if k not in st.session_state:
         st.session_state[k] = ""
@@ -63,7 +60,7 @@ def enhance_image_for_ocr(uploaded_file):
         return Image.open(uploaded_file)
 
 # =========================================================
-# БАЗА ДАННЫХ АВТО
+# БАЗА ДАННЫХ АВТО 
 # =========================================================
 
 CAR_BRANDS = [
@@ -113,7 +110,6 @@ sts_photos = st.file_uploader(
 
 if sts_photos:
     if st.button("Распознать документы", type="primary"):
-        # ОЧИЩАЕМ ПАМЯТЬ ПЕРЕД НОВЫМ СКАНИРОВАНИЕМ
         for k in keys: st.session_state[k] = ""
         st.session_state.auto_steering = "Левый руль"
         
@@ -130,15 +126,37 @@ if sts_photos:
                     all_extracted_text += text_raw + "\n\n" + text_enh + "\n\n"
                 
                 lines = [line.strip() for line in all_extracted_text.split('\n') if line.strip()]
-                clean_text_no_spaces = all_extracted_text.upper().replace(" ", "").replace("\n", "").replace("O", "0")
+                clean_text_numbers = all_extracted_text.upper().replace(" ", "").replace("\n", "").replace("O", "0")
                 clean_text_words = all_extracted_text.upper()
 
                 # ==============================================================
-                # 1. ГЛОБАЛЬНЫЙ ПОИСК (Госномер, Марка, Модель)
+                # 1. ГЛОБАЛЬНЫЙ ПОИСК (Госномер, Марка, Модель, VIN)
                 # ==============================================================
 
-                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_no_spaces)
+                reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_numbers)
                 if reg_match_kg: st.session_state.auto_reg = reg_match_kg.group(0)
+
+                # VIN (Ищем 17 символов. Исключаем мусорные слова)
+                vin_matches = re.finditer(r'[A-HJ-NPR-Z0-9]{17}', clean_text_numbers)
+                for match in vin_matches:
+                    vin_cand = match.group(0)
+                    if sum(c.isdigit() for c in vin_cand) >= 4 and not re.search(r'(KATT|YEAR|KYRG)', vin_cand):
+                        st.session_state.auto_vin = vin_cand
+                        break
+                
+                # Номер Шасси (ЯПОНСКИЕ АВТО). Ищет формат букв и цифр, возможно с дефисом
+                if not st.session_state.auto_vin:
+                    chassis_match = re.search(r'[A-Z0-9]{3,6}[-]?\d{5,7}', clean_text_numbers)
+                    if chassis_match and not re.search(r'(KATT|YEAR|KYRG)', chassis_match.group(0)):
+                        st.session_state.auto_vin = chassis_match.group(0)
+
+                # Номер техпаспорта (Исключаем предлоги ОТ и ДО, чтобы не путать с датами)
+                tp_matches = re.finditer(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
+                for match in tp_matches:
+                    tp_cand = match.group(0)
+                    if not tp_cand.startswith("ОТ") and not tp_cand.startswith("ДО"):
+                        st.session_state.auto_tech_passport = tp_cand
+                        break
 
                 mapping = {
                     'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 
@@ -169,14 +187,11 @@ if sts_photos:
 
                     # --- ПОИСК ФИО ---
                     if not st.session_state.auto_fio and any(kw in line_up for kw in ["ВЛАДЕЛЕЦ", "ЭЭСИ", "OWNER"]):
-                        # 1. Смотрим НАПРАВО (физический СТС)
                         right = re.split(r'ВЛАДЕЛЕЦ|ЭЭСИ|OWNER', line_up)[-1]
-                        # Жестко удаляем английские буквы и знаки препинания (убьет мусор вроде Ванлкоуа Сно:Ро.#)
                         right_cyr = re.sub(r'[A-Z!@#\$%\^&\*\(\)_+=\{\}\[\];\'<>\?\|\\~`]', '', right).replace(":", "").strip()
                         if len(right_cyr.split()) >= 2 and not re.search(r'\d', right_cyr):
                             st.session_state.auto_fio = right_cyr.title()
                         else:
-                            # 2. Смотрим ВНИЗ (электронный СТС)
                             for j in range(1, 4):
                                 if i + j < len(lines):
                                     cand = lines[i+j]
@@ -187,22 +202,17 @@ if sts_photos:
 
                     # --- ПОИСК АДРЕСА ---
                     if not st.session_state.auto_address and any(kw in line_up for kw in ["ДАРЕГИ", "АДРЕС", "ADDRESS"]):
-                        # 1. Смотрим НАПРАВО
                         right = re.split(r'ДАРЕГИ|АДРЕС СОБСТВЕННИКА|ADDRESS', line_up)[-1]
-                        # Удаляем английский язык, чтобы не было "THE KYRGYZ REPUBLIC"
                         right_cyr = re.sub(r'[A-Z]', '', right).replace(":", "").replace("'", "").strip()
                         if len(right_cyr) > 10 and "БЕРГЕН" not in right_cyr:
                             st.session_state.auto_address = right_cyr
                         else:
-                            # 2. Смотрим ВНИЗ и собираем многострочный адрес
                             addr_parts = []
                             for j in range(1, 5):
                                 if i + j < len(lines):
                                     cand_up = lines[i+j].upper()
-                                    # Условие остановки
                                     if any(kw in cand_up for kw in ["БЕРГЕН", "ОРГАН", "МАРКА", "МОДЕЛЬ", "КАТТАЛГАН"]): break
                                     cand_cyr = re.sub(r'[A-Z]', '', cand_up).strip()
-                                    # Игнорируем пустые строки и строки состоящие только из цифр (ПИН)
                                     if len(cand_cyr) > 3 and not re.fullmatch(r'[\d\s\.\,]+', cand_cyr):
                                         addr_parts.append(cand_cyr)
                             if addr_parts:
@@ -210,7 +220,6 @@ if sts_photos:
 
                     # --- ПОИСК ОБЪЕМА ДВС ---
                     if not st.session_state.auto_engine and any(kw in line_up for kw in ["ОБЪЕМ", "КӨЛӨМҮ", "CAPACITY"]):
-                        # Ищем только реалистичные кубы (800 - 7999), чтобы не взять дом 121
                         right = re.split(r'ОБЪЕМ|КӨЛӨМҮ|CAPACITY|СМ3', line_up)[-1]
                         vols = re.findall(r'\b([8-9]\d{2}|[1-7]\d{3})\b', right)
                         if vols:
@@ -223,19 +232,18 @@ if sts_photos:
                                         st.session_state.auto_engine = vols_below[-1]
                                         break
 
-                    # --- ПОИСК VIN ---
+                    # --- ПОИСК VIN (С УЧЕТОМ ЯПОНСКИХ ШАССИ) ---
                     if not st.session_state.auto_vin and any(kw in line_up for kw in ["VIN", "ШАССИ", "IDENTIFICATION"]):
                         right = re.split(r'VIN|ШАССИ|NUMBER', line_up.replace("O", "0"))[-1]
-                        vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}', right)
-                        # Защита: в VIN должно быть хотя бы 3 буквы, чтобы не поймать цифры ПИН-кода
-                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 3:
+                        vin_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z0-9]{3,6}[-]?\d{5,7}', right)
+                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 2:
                             st.session_state.auto_vin = vin_match.group(0)
                         else:
                             for j in range(1, 4):
                                 if i + j < len(lines):
                                     cand = lines[i+j].replace("O", "0").upper()
-                                    v_match = re.search(r'[A-HJ-NPR-Z0-9]{17}', cand)
-                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 3:
+                                    v_match = re.search(r'[A-HJ-NPR-Z0-9]{17}|[A-Z0-9]{3,6}[-]?\d{5,7}', cand)
+                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 2:
                                         st.session_state.auto_vin = v_match.group(0)
                                         break
                                         
@@ -262,11 +270,6 @@ if sts_photos:
                         for bt in KNOWN_BODIES:
                             if bt in line_up:
                                 st.session_state.auto_body_type = line.title(); break
-
-                # Номер техпаспорта (ищет в любом месте документа)
-                if not st.session_state.auto_tech_passport:
-                    tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
-                    if tp_match: st.session_state.auto_tech_passport = tp_match.group(0)
 
                 st.success("Документы проанализированы! Данные перенесены в форму ниже.")
                 
