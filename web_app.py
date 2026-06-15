@@ -136,7 +136,7 @@ if sts_photos:
                 reg_match_kg = re.search(r'\d{2}KG\d{3}[A-Z]{2,3}', clean_text_numbers)
                 if reg_match_kg: st.session_state.auto_reg = reg_match_kg.group(0)
 
-                # VIN (Ищем 17 символов. ЖЕСТКО Исключаем мусорные английские слова)
+                # VIN
                 vin_matches = re.finditer(r'\b[A-HJ-NPR-Z0-9]{17}\b', clean_text_words.replace("O", "0"))
                 for match in vin_matches:
                     vin_cand = match.group(0)
@@ -144,7 +144,7 @@ if sts_photos:
                         st.session_state.auto_vin = vin_cand
                         break
                 
-                # Номер Шасси (ЯПОНСКИЕ АВТО). Ищем В ТЕКСТЕ С ПРОБЕЛАМИ (\b), чтобы не прилипало "NT"
+                # Номер Шасси
                 if not st.session_state.auto_vin:
                     chassis_matches = re.finditer(r'\b[A-Z]{2,5}\d{1,4}[-]?\d{4,8}\b', clean_text_words.replace("O", "0"))
                     for match in chassis_matches:
@@ -153,14 +153,7 @@ if sts_photos:
                             st.session_state.auto_vin = chass
                             break
 
-                # Номер техпаспорта
-                tp_matches = re.finditer(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', clean_text_words)
-                for match in tp_matches:
-                    tp_cand = match.group(0)
-                    if not tp_cand.startswith("ОТ") and not tp_cand.startswith("ДО"):
-                        st.session_state.auto_tech_passport = tp_cand
-                        break
-
+                # Марка и Модель
                 mapping = {
                     'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M', 
                     'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'И': 'I', 'Л': 'L', 'Д': 'D', 'Ф': 'F', 
@@ -235,21 +228,6 @@ if sts_photos:
                                         st.session_state.auto_engine = vols_below[-1]
                                         break
 
-                    # --- ПОИСК VIN (С УЧЕТОМ ЯПОНСКИХ ШАССИ И ГРАНИЦ СЛОВ) ---
-                    if not st.session_state.auto_vin and any(kw in line_up for kw in ["VIN", "ШАССИ", "IDENTIFICATION"]):
-                        right = re.split(r'VIN|ШАССИ|NUMBER', line_up.replace("O", "0"))[-1]
-                        vin_match = re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b|\b[A-Z]{2,5}\d{1,4}[-]?\d{4,8}\b', right)
-                        if vin_match and sum(c.isalpha() for c in vin_match.group(0)) >= 2 and not vin_match.group(0).startswith("KG"):
-                            st.session_state.auto_vin = vin_match.group(0)
-                        else:
-                            for j in range(1, 4):
-                                if i + j < len(lines):
-                                    cand = lines[i+j].replace("O", "0").upper()
-                                    v_match = re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b|\b[A-Z]{2,5}\d{1,4}[-]?\d{4,8}\b', cand)
-                                    if v_match and sum(c.isalpha() for c in v_match.group(0)) >= 2 and not v_match.group(0).startswith("KG"):
-                                        st.session_state.auto_vin = v_match.group(0)
-                                        break
-                                        
                     # --- ПОИСК ГОДА ---
                     if not st.session_state.auto_year and any(kw in line_up for kw in ["ГОД", "ЖЫЛЫ", "YEAR"]):
                         right = re.split(r'ГОД|ЖЫЛЫ|MANUFACTURE', line_up)[-1]
@@ -273,6 +251,33 @@ if sts_photos:
                         for bt in KNOWN_BODIES:
                             if bt in line_up:
                                 st.session_state.auto_body_type = line.title(); break
+                                
+                    # --- ПОИСК ТЕХПАСПОРТА (ЯКОРЬ) ---
+                    if not st.session_state.auto_tech_passport and any(kw in line_up for kw in ["СЕРИЯ", "SERIES"]):
+                        right = re.split(r'НОМЕР|СЕРИЯСЫ|NUMBER', line_up)[-1]
+                        tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', right)
+                        if tp_match and not tp_match.group(0).startswith("ОТ") and not tp_match.group(0).startswith("ДО"):
+                            st.session_state.auto_tech_passport = tp_match.group(0)
+                        else:
+                            for j in range(1, 4):
+                                if i + j < len(lines):
+                                    cand = lines[i+j].upper()
+                                    tp_match_below = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', cand)
+                                    if tp_match_below and not tp_match_below.group(0).startswith("ОТ") and not tp_match_below.group(0).startswith("ДО"):
+                                        st.session_state.auto_tech_passport = tp_match_below.group(0)
+                                        break
+
+                # --- ФОЛБЭК ДЛЯ ТЕХПАСПОРТА (ГЛОБАЛЬНЫЙ ПОИСК С ЗАЩИТОЙ ОТ ГБО) ---
+                if not st.session_state.auto_tech_passport:
+                    for line in lines:
+                        line_up = line.upper()
+                        # Жестко игнорируем строки, в которых есть упоминания об оборудовании и заменах!
+                        if any(bad in line_up for bad in ["ОБОРУДОВАНИЕ", "ГАЗОБАЛЛОННОЕ", "ВЗАМЕН", "ОТМЕТКИ", "SPECIAL"]):
+                            continue
+                        tp_match = re.search(r'\b[A-ZА-Я]{2}\s?\d{6,7}\b', line_up)
+                        if tp_match and not tp_match.group(0).startswith("ОТ") and not tp_match.group(0).startswith("ДО"):
+                            st.session_state.auto_tech_passport = tp_match.group(0)
+                            break
 
                 st.success("Документы проанализированы! Данные перенесены в форму ниже.")
                 
